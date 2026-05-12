@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <dirent.h>
+#include <memory>
 
 #include <QProcess>
 #include <QStandardPaths>
@@ -56,6 +57,9 @@ private Q_SLOTS:
 #ifdef WASTE_DISK_SPACE
 	void testReadWrite4GBFile();
 #endif // WASTE_DISK_SPACE
+	void testAutomount();
+	void testAutomountHostlessOrigin();
+
 
 private:
 	QDateTime roundDownToSecond(const QDateTime &dt);
@@ -80,6 +84,12 @@ void FileOpsTest::initTestCase()
 	// which is fatal if umount fails while something is mounted inside
 	m_mountDir.setAutoRemove(false);
 	QString programpath = QFINDTESTDATA("kio-fuse");
+
+	const QByteArray existingPluginPath = qgetenv("QT_PLUGIN_PATH");
+	QByteArray newPluginPath = QByteArray(KIOFUSE_STUBWORKER_DIR);
+	if(!existingPluginPath.isEmpty())
+		newPluginPath += ':' + existingPluginPath;
+	qputenv("QT_PLUGIN_PATH", newPluginPath);
 
 	QProcess kiofuseProcess;
 	kiofuseProcess.setProgram(programpath);
@@ -1083,7 +1093,51 @@ void FileOpsTest::testReadWrite4GBFile()
 	QVERIFY(mirroredFile.seek(qint64(4096)*1024*1024-6));
 	QCOMPARE(localFile2.read(20), mirroredFile.read(20));
 }
-#endif // WASTE_DISK_SPACE
+#endif
+
+void FileOpsTest::testAutomount()
+{
+	const QString hostDir = QStringLiteral("%1/stub/anyhost").arg(m_mountDir.path());
+
+	struct stat st;
+	QCOMPARE(stat(qPrintable(hostDir), &st), 0);
+	QVERIFY(S_ISDIR(st.st_mode));
+
+	QDir d(hostDir);
+	QStringList names = d.entryList(QDir::Files);
+	std::sort(names.begin(), names.end());
+	QCOMPARE(names, (QStringList{QStringLiteral("entry1.txt"), QStringLiteral("entry2.txt")}));
+}
+
+void FileOpsTest::testAutomountHostlessOrigin()
+{
+	// Use a separate scheme so mounting its root cannot affect other automount tests.
+	const QString schemeDir = m_mountDir.path() + QStringLiteral("/stubroot");
+	const QString hostDir = schemeDir + QStringLiteral("/anyhost");
+	struct stat schemeBefore, hostBefore;
+	QCOMPARE(stat(qPrintable(schemeDir), &schemeBefore), 0);
+	QCOMPARE(stat(qPrintable(hostDir), &hostBefore), 0);
+
+	std::unique_ptr<DIR, decltype(&closedir)> directory(opendir(qPrintable(schemeDir)), closedir);
+	QVERIFY(directory);
+
+	QDBusPendingReply<QString> reply = m_kiofuse_iface.mountUrl(QStringLiteral("stubroot:/"));
+	reply.waitForFinished();
+	QVERIFY2(!reply.isError(), qPrintable(reply.error().message()));
+	QCOMPARE(reply.value(), schemeDir);
+
+	// Promotion must preserve both the scheme inode and existing child mounts.
+	struct stat schemeAfter, hostAfter;
+	QCOMPARE(stat(qPrintable(schemeDir), &schemeAfter), 0);
+	QCOMPARE(schemeAfter.st_ino, schemeBefore.st_ino);
+	QCOMPARE(stat(qPrintable(hostDir), &hostAfter), 0);
+	QCOMPARE(hostAfter.st_ino, hostBefore.st_ino);
+	QCOMPARE(closedir(directory.release()), 0);
+
+	QStringList names = QDir(schemeDir).entryList(QDir::Files);
+	std::sort(names.begin(), names.end());
+	QCOMPARE(names, (QStringList{QStringLiteral("entry1.txt"), QStringLiteral("entry2.txt")}));
+}
 
 QDateTime FileOpsTest::roundDownToSecond(const QDateTime &dt)
 {
