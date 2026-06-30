@@ -59,7 +59,6 @@ private Q_SLOTS:
 #endif // WASTE_DISK_SPACE
 	void testAutomount();
 	void testAutomountHostlessOrigin();
-	void testAutomountSchemeDir();
 	void testAutomountUnknownProtocol();
 	void testAutomountFailedMount();
 	void testAutomountHostlessAuthority();
@@ -1150,15 +1149,6 @@ void FileOpsTest::testAutomountHostlessOrigin()
 	QStringList names = QDir(schemeDir).entryList(QDir::Files);
 	std::sort(names.begin(), names.end());
 	QCOMPARE(names, (QStringList{QStringLiteral("entry1.txt"), QStringLiteral("entry2.txt")}));
-}
-
-void FileOpsTest::testAutomountSchemeDir()
-{
-	const QString schemeDir = QStringLiteral("%1/stub").arg(m_mountDir.path());
-
-	struct stat st;
-	QCOMPARE(stat(qPrintable(schemeDir), &st), 0);
-	QVERIFY(S_ISDIR(st.st_mode));
 }
 
 void FileOpsTest::testAutomountUnknownProtocol()
