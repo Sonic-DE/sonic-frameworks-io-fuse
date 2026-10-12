@@ -56,6 +56,13 @@ private Q_SLOTS:
 #ifdef WASTE_DISK_SPACE
 	void testReadWrite4GBFile();
 #endif // WASTE_DISK_SPACE
+	void testAutomount();
+	void testAutomountUnknownProtocol();
+	void testAutomountFailedMount();
+	void testAutomountHostlessAuthority();
+	void testAutomountPersistsUsername();
+	void testAutomountInjectsUsername();
+
 
 private:
 	QDateTime roundDownToSecond(const QDateTime &dt);
@@ -72,6 +79,7 @@ private:
 		                                              QStringLiteral("/org/kde/KIOFuse"),
 		                                              QDBusConnection::sessionBus()};
 	QTemporaryDir m_mountDir;
+	QTemporaryDir m_configDir;
 };
 
 void FileOpsTest::initTestCase()
@@ -80,6 +88,18 @@ void FileOpsTest::initTestCase()
 	// which is fatal if umount fails while something is mounted inside
 	m_mountDir.setAutoRemove(false);
 	QString programpath = QFINDTESTDATA("kio-fuse");
+
+	const QByteArray existingPluginPath = qgetenv("QT_PLUGIN_PATH");
+	QByteArray newPluginPath = QByteArray(KIOFUSE_STUBWORKER_DIR);
+	if(!existingPluginPath.isEmpty())
+		newPluginPath += ':' + existingPluginPath;
+	qputenv("QT_PLUGIN_PATH", newPluginPath);
+	qputenv("XDG_CONFIG_HOME", m_configDir.path().toLocal8Bit());
+
+	QFile seed(m_configDir.path() + QStringLiteral("/kio-fuserc"));
+	QVERIFY(seed.open(QIODevice::WriteOnly));
+	seed.write("[Usernames]\nstub://injecthost=presetuser\n");
+	seed.close();
 
 	QProcess kiofuseProcess;
 	kiofuseProcess.setProgram(programpath);
@@ -1084,6 +1104,68 @@ void FileOpsTest::testReadWrite4GBFile()
 	QCOMPARE(localFile2.read(20), mirroredFile.read(20));
 }
 #endif // WASTE_DISK_SPACE
+
+void FileOpsTest::testAutomount()
+{
+	const QString hostDir = QStringLiteral("%1/stub/anyhost").arg(m_mountDir.path());
+
+	struct stat st;
+	QCOMPARE(stat(qPrintable(hostDir), &st), 0);
+	QVERIFY(S_ISDIR(st.st_mode));
+
+	QDir d(hostDir);
+	QStringList names = d.entryList(QDir::Files);
+	std::sort(names.begin(), names.end());
+	QCOMPARE(names, (QStringList{QStringLiteral("entry1.txt"), QStringLiteral("entry2.txt")}));
+}
+
+void FileOpsTest::testAutomountUnknownProtocol()
+{
+	const QString unrealscheme = QStringLiteral("%1/notarealscheme").arg(m_mountDir.path());
+
+	struct stat st;
+	QCOMPARE(stat(qPrintable(unrealscheme), &st), -1);
+	QCOMPARE(errno, ENOENT);
+}
+
+
+void FileOpsTest::testAutomountFailedMount()
+{
+	const QString failHost = QStringLiteral("%1/stub/failhost").arg(m_mountDir.path());
+
+	struct stat st;
+	QCOMPARE(stat(qPrintable(failHost), &st), -1);
+	QCOMPARE(errno, ENOENT);
+
+	// Repeated lookup, still ENOENT: the failure is cached as a negative entry.
+	QCOMPARE(stat(qPrintable(failHost), &st), -1);
+	QCOMPARE(errno, ENOENT);
+}
+
+void FileOpsTest::testAutomountHostlessAuthority()
+{
+	// An authority with a user but no host ("user@") is not a mountable origin.
+	const QString hostless = QStringLiteral("%1/stub/user@").arg(m_mountDir.path());
+
+	struct stat st;
+	QCOMPARE(stat(qPrintable(hostless), &st), -1);
+	QCOMPARE(errno, ENOENT);
+}
+
+void FileOpsTest::testAutomountPersistsUsername()
+{
+	QDir(QStringLiteral("%1/stub/authhost").arg(m_mountDir.path())).entryList(QDir::Files);
+
+	QFile rc(m_configDir.path() + QStringLiteral("/kio-fuserc"));
+	QVERIFY(rc.open(QIODevice::ReadOnly));
+	QVERIFY(rc.readAll().contains("stub://authhost=stubuser"));
+}
+
+void FileOpsTest::testAutomountInjectsUsername()
+{
+	const QStringList entries = QDir(QStringLiteral("%1/stub/injecthost").arg(m_mountDir.path())).entryList(QDir::Files);
+	QVERIFY(entries.contains(QStringLiteral("presetuser")));
+}
 
 QDateTime FileOpsTest::roundDownToSecond(const QDateTime &dt)
 {

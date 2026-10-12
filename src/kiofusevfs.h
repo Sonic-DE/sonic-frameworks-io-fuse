@@ -158,7 +158,10 @@ private:
 	/** Stats url. If successful, returns the path where url + pathElements is reachable in callback.
 	  * If it failed, it moves one part of pathElements to url and tries again, recursively. */
 	void findAndCreateOrigin(const QUrl &url, const QStringList &pathElements, const std::function<void(const QString&, int)> &callback);
-    
+	
+	/** Creates the scheme dir or mounts the authority. */
+	void attemptAutomount(fuse_req_t req, const std::shared_ptr<KIOFuseDirNode> &parentDirNode, const QString &nodeName);
+
 	/** Returns the corresponding FUSE error to the given KIO Job error */
 	static int kioErrorToFuseError(const int kioError);
 
